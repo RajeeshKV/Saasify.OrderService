@@ -36,35 +36,88 @@ namespace Infrastructure
 
         private async Task InitializeConnectionAsync()
         {
-            var factory = new ConnectionFactory()
-            {
-                HostName = _configuration["RabbitMQ:HostName"],
-                UserName = _configuration["RabbitMQ:UserName"],
-                Password = _configuration["RabbitMQ:Password"],
-                VirtualHost = _configuration["RabbitMQ:VirtualHost"] ?? "/",
-                Port = int.Parse(_configuration["RabbitMQ:Port"] ?? "5672"),
-                RequestedHeartbeat = TimeSpan.FromSeconds(60),
-                AutomaticRecoveryEnabled = true,
-                NetworkRecoveryInterval = TimeSpan.FromSeconds(10)
-            };
+            // Log connection parameters (without password)
+            var hostName = _configuration["RabbitMQ:HostName"];
+            var userName = _configuration["RabbitMQ:UserName"];
+            var port = _configuration["RabbitMQ:Port"] ?? "5671";
+            var sslEnabled = bool.Parse(_configuration["RabbitMQ:SslEnabled"] ?? "true");
+            var virtualHost = _configuration["RabbitMQ:VirtualHost"] ?? "/";
+            
+            _logger.LogInformation("Attempting RabbitMQ connection to {HostName}:{Port} as {UserName} on {VirtualHost} (SSL: {SslEnabled})", 
+                hostName, port, userName, virtualHost, sslEnabled);
 
-            // Configure SSL for CloudAMQP
-            if (bool.Parse(_configuration["RabbitMQ:SslEnabled"] ?? "false"))
+            // Try AMQPS URI connection first
+            await TryAmqpsUriConnection();
+
+            // If URI connection fails, try standard connection
+            if (_connection == null)
             {
-                factory.Ssl = new SslOption
-                {
-                    Enabled = true,
-                    AcceptablePolicyErrors = SslPolicyErrors.RemoteCertificateNameMismatch |
-                                           SslPolicyErrors.RemoteCertificateChainErrors |
-                                           SslPolicyErrors.None,
-                    Version = System.Security.Authentication.SslProtocols.Tls12
-                };
-                
-                // Add SSL options for CloudAMQP
-                factory.AmqpUriSslProtocols = System.Security.Authentication.SslProtocols.Tls12;
+                await TryStandardConnection();
             }
 
-            // Add retry logic for RabbitMQ connection
+            // If connection established, declare exchange
+            if (_connection != null && _channel != null)
+            {
+                try
+                {
+                    _channel.ExchangeDeclare(
+                        exchange: _exchangeName,
+                        type: ExchangeType.Direct,
+                        durable: true,
+                        autoDelete: false);
+
+                    _logger.LogInformation("RabbitMQ connection and exchange setup completed successfully");
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Failed to declare RabbitMQ exchange");
+                    CloseConnection();
+                }
+            }
+            else
+            {
+                _logger.LogWarning("OrderService will start without RabbitMQ connection. Orders will be queued locally.");
+            }
+        }
+
+        private async Task TryAmqpsUriConnection()
+        {
+            try
+            {
+                var hostName = _configuration["RabbitMQ:HostName"];
+                var userName = _configuration["RabbitMQ:UserName"];
+                var password = _configuration["RabbitMQ:Password"];
+                var port = _configuration["RabbitMQ:Port"] ?? "5671";
+                var virtualHost = _configuration["RabbitMQ:VirtualHost"] ?? "/";
+                
+                // Construct AMQPS URI
+                var uri = $"amqps://{userName}:{password}@{hostName}:{port}/{virtualHost}";
+                
+                _logger.LogInformation("Trying AMQPS URI connection to {HostName}:{Port}", hostName, port);
+                
+                var factory = new ConnectionFactory()
+                {
+                    Uri = new Uri(uri),
+                    ClientProvidedName = "OrderService-" + Environment.MachineName,
+                    RequestedHeartbeat = TimeSpan.FromSeconds(60),
+                    AutomaticRecoveryEnabled = true,
+                    NetworkRecoveryInterval = TimeSpan.FromSeconds(10)
+                };
+
+                _connection = factory.CreateConnection();
+                _channel = _connection.CreateModel();
+                
+                _logger.LogInformation("RabbitMQ connection established via AMQPS URI");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "AMQPS URI connection failed, trying standard method");
+                CloseConnection();
+            }
+        }
+
+        private async Task TryStandardConnection()
+        {
             var maxRetries = 5;
             var retryDelay = TimeSpan.FromSeconds(5);
             var retryCount = 0;
@@ -73,17 +126,39 @@ namespace Infrastructure
             {
                 try
                 {
+                    var factory = new ConnectionFactory()
+                    {
+                        HostName = _configuration["RabbitMQ:HostName"],
+                        UserName = _configuration["RabbitMQ:UserName"],
+                        Password = _configuration["RabbitMQ:Password"],
+                        VirtualHost = _configuration["RabbitMQ:VirtualHost"] ?? "/",
+                        Port = int.Parse(_configuration["RabbitMQ:Port"] ?? "5671"),
+                        RequestedHeartbeat = TimeSpan.FromSeconds(60),
+                        AutomaticRecoveryEnabled = true,
+                        NetworkRecoveryInterval = TimeSpan.FromSeconds(10),
+                        ClientProvidedName = "OrderService-" + Environment.MachineName
+                    };
+
+                    // Configure SSL for CloudAMQP
+                    if (bool.Parse(_configuration["RabbitMQ:SslEnabled"] ?? "true"))
+                    {
+                        factory.Ssl = new SslOption
+                        {
+                            Enabled = true,
+                            AcceptablePolicyErrors = SslPolicyErrors.RemoteCertificateNameMismatch |
+                                                   SslPolicyErrors.RemoteCertificateChainErrors |
+                                                   SslPolicyErrors.None,
+                            Version = System.Security.Authentication.SslProtocols.Tls12,
+                            ServerName = _configuration["RabbitMQ:HostName"]
+                        };
+                    }
+
+                    _logger.LogInformation("Attempting standard RabbitMQ connection (attempt {RetryCount}/{MaxRetries})", retryCount + 1, maxRetries);
+                    
                     _connection = factory.CreateConnection();
                     _channel = _connection.CreateModel();
-
-                    // Declare exchange
-                    _channel.ExchangeDeclare(
-                        exchange: _exchangeName,
-                        type: ExchangeType.Direct,
-                        durable: true,
-                        autoDelete: false);
-
-                    _logger.LogInformation("RabbitMQ connection established successfully");
+                    
+                    _logger.LogInformation("RabbitMQ connection established via standard method");
                     break;
                 }
                 catch (Exception ex)
@@ -94,13 +169,26 @@ namespace Infrastructure
                     if (retryCount >= maxRetries)
                     {
                         _logger.LogError(ex, "Failed to connect to RabbitMQ after {MaxRetries} attempts", maxRetries);
-                        // Don't throw exception - allow service to start without RabbitMQ
-                        _logger.LogWarning("OrderService will start without RabbitMQ connection. Orders will be queued locally.");
                         break;
                     }
                     
                     await Task.Delay(retryDelay);
                 }
+            }
+        }
+
+        private void CloseConnection()
+        {
+            try
+            {
+                _channel?.Close();
+                _channel = null;
+                _connection?.Close();
+                _connection = null;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Error closing RabbitMQ connection");
             }
         }
 
