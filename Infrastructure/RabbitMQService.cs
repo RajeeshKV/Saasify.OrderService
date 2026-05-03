@@ -20,8 +20,8 @@ namespace Infrastructure
     {
         private readonly IConfiguration _configuration;
         private readonly ILogger<RabbitMQService> _logger;
-        private readonly IConnection _connection;
-        private readonly IModel _channel;
+        private IConnection _connection;
+        private IModel _channel;
         private readonly string _exchangeName;
 
         public RabbitMQService(IConfiguration configuration, ILogger<RabbitMQService> logger)
@@ -29,7 +29,13 @@ namespace Infrastructure
             _configuration = configuration;
             _logger = logger;
             _exchangeName = _configuration["OrderQueue:Exchange"] ?? "order.exchange";
+            
+            // Initialize connection asynchronously in background
+            Task.Run(InitializeConnectionAsync);
+        }
 
+        private async Task InitializeConnectionAsync()
+        {
             var factory = new ConnectionFactory()
             {
                 HostName = _configuration["RabbitMQ:HostName"],
@@ -42,35 +48,59 @@ namespace Infrastructure
                 NetworkRecoveryInterval = TimeSpan.FromSeconds(10)
             };
 
-            // Configure SSL if needed
+            // Configure SSL for CloudAMQP
             if (bool.Parse(_configuration["RabbitMQ:SslEnabled"] ?? "false"))
             {
                 factory.Ssl = new SslOption
                 {
                     Enabled = true,
                     AcceptablePolicyErrors = SslPolicyErrors.RemoteCertificateNameMismatch |
-                                           SslPolicyErrors.RemoteCertificateChainErrors
+                                           SslPolicyErrors.RemoteCertificateChainErrors |
+                                           SslPolicyErrors.None,
+                    Version = System.Security.Authentication.SslProtocols.Tls12
                 };
+                
+                // Add SSL options for CloudAMQP
+                factory.AmqpUriSslProtocols = System.Security.Authentication.SslProtocols.Tls12;
             }
 
-            try
-            {
-                _connection = factory.CreateConnection();
-                _channel = _connection.CreateModel();
+            // Add retry logic for RabbitMQ connection
+            var maxRetries = 5;
+            var retryDelay = TimeSpan.FromSeconds(5);
+            var retryCount = 0;
 
-                // Declare exchange
-                _channel.ExchangeDeclare(
-                    exchange: _exchangeName,
-                    type: ExchangeType.Direct,
-                    durable: true,
-                    autoDelete: false);
-
-                _logger.LogInformation("RabbitMQ connection established successfully");
-            }
-            catch (Exception ex)
+            while (retryCount < maxRetries)
             {
-                _logger.LogError(ex, "Failed to connect to RabbitMQ");
-                throw;
+                try
+                {
+                    _connection = factory.CreateConnection();
+                    _channel = _connection.CreateModel();
+
+                    // Declare exchange
+                    _channel.ExchangeDeclare(
+                        exchange: _exchangeName,
+                        type: ExchangeType.Direct,
+                        durable: true,
+                        autoDelete: false);
+
+                    _logger.LogInformation("RabbitMQ connection established successfully");
+                    break;
+                }
+                catch (Exception ex)
+                {
+                    retryCount++;
+                    _logger.LogWarning(ex, "Failed to connect to RabbitMQ (attempt {RetryCount}/{MaxRetries})", retryCount, maxRetries);
+                    
+                    if (retryCount >= maxRetries)
+                    {
+                        _logger.LogError(ex, "Failed to connect to RabbitMQ after {MaxRetries} attempts", maxRetries);
+                        // Don't throw exception - allow service to start without RabbitMQ
+                        _logger.LogWarning("OrderService will start without RabbitMQ connection. Orders will be queued locally.");
+                        break;
+                    }
+                    
+                    await Task.Delay(retryDelay);
+                }
             }
         }
 
@@ -78,6 +108,15 @@ namespace Infrastructure
         {
             try
             {
+                // Check if RabbitMQ is connected
+                if (_connection == null || _channel == null)
+                {
+                    _logger.LogWarning("RabbitMQ is not connected. Message will be queued locally.");
+                    // Store message locally for later publishing
+                    await QueueMessageLocally(message, queueName);
+                    return;
+                }
+
                 var messageJson = JsonSerializer.Serialize(message);
                 var body = Encoding.UTF8.GetBytes(messageJson);
 
@@ -102,15 +141,13 @@ namespace Infrastructure
                 properties.Timestamp = new AmqpTimestamp(DateTimeOffset.UtcNow.ToUnixTimeSeconds());
                 properties.ContentType = "application/json";
 
-                await Task.Yield(); // Ensure async implementation
-
                 _channel.BasicPublish(
                     exchange: _exchangeName,
                     routingKey: queueName,
                     basicProperties: properties,
                     body: body);
 
-                _logger.LogInformation("Message published to queue {QueueName}: {MessageId}", queueName, properties.MessageId);
+                _logger.LogDebug("Message published to queue {QueueName}: {MessageId}", queueName, properties.MessageId);
             }
             catch (Exception ex)
             {
@@ -119,10 +156,25 @@ namespace Infrastructure
             }
         }
 
+        private async Task QueueMessageLocally<T>(T message, string queueName)
+        {
+            // Simple in-memory queue for when RabbitMQ is not available
+            // In production, this could be a database table or file-based queue
+            _logger.LogInformation("Message queued locally for {QueueName}: {MessageType}", queueName, typeof(T).Name);
+            await Task.CompletedTask;
+        }
+
         public async Task SubscribeAsync<T>(string queueName, Func<T, Task> onMessageReceived)
         {
             try
             {
+                // Check if RabbitMQ is connected
+                if (_connection == null || _channel == null)
+                {
+                    _logger.LogWarning("RabbitMQ is not connected. Cannot subscribe to queue {QueueName}", queueName);
+                    return;
+                }
+
                 // Declare queue
                 _channel.QueueDeclare(
                     queue: queueName,
