@@ -21,9 +21,11 @@ namespace Infrastructure
                 var connectionString = Environment.GetEnvironmentVariable("DATABASE_URL") 
                     ?? configuration.GetConnectionString("DefaultConnection");
                 
-                options.UseNpgsql(
-                    connectionString,
-                    b => b.MigrationsAssembly("Infrastructure"));
+                var dataSourceBuilder = new Npgsql.NpgsqlDataSourceBuilder(connectionString);
+                dataSourceBuilder.EnableDynamicJson(); // Enable dynamic JSON serialization
+                var dataSource = dataSourceBuilder.Build();
+                
+                options.UseNpgsql(dataSource, b => b.MigrationsAssembly("Infrastructure"));
             });
 
             // RabbitMQ

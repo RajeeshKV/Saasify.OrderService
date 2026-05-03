@@ -5,6 +5,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using System.Diagnostics;
+using Npgsql;
 
 namespace Application
 {
@@ -33,13 +34,30 @@ namespace Application
         {
             _logger.LogInformation("MessageProcessorService starting...");
             
-            await _rabbitMQService.SubscribeAsync<OrderMessage>(
-                _queueName, 
-                ProcessOrderMessageAsync);
+            // Keep the subscription alive
+            while (!stoppingToken.IsCancellationRequested)
+            {
+                try
+                {
+                    await _rabbitMQService.SubscribeAsync<OrderMessage>(
+                        _queueName, 
+                        ProcessOrderMessageAsync);
+                    
+                    // If we reach here, the subscription was closed, wait and retry
+                    await Task.Delay(5000, stoppingToken);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Error in message subscription, retrying in 5 seconds...");
+                    await Task.Delay(5000, stoppingToken);
+                }
+            }
         }
 
         private async Task ProcessOrderMessageAsync(OrderMessage message)
         {
+            int? actualOrderId = null;
+            
             try
             {
                 _logger.LogInformation("Processing order message: CorrelationId={CorrelationId}, TenantId={TenantId}, Amount={Amount}", 
@@ -50,29 +68,31 @@ namespace Application
                 
                 // Create order
                 var orderResponse = await orderService.CreateOrderAsync(message);
+                actualOrderId = orderResponse.OrderId;
+                
                 _logger.LogInformation("Created new order: OrderId={OrderId}, ExternalOrderId={ExternalOrderId}", 
                     orderResponse.OrderId, orderResponse.ExternalOrderId);
                 
                 // Simulate payment processing
                 var result = await orderService.ProcessOrderAsync(message);
                 
-                // Publish status update
-                await PublishOrderStatusAsync(message, result);
+                // Publish status update with actual order ID
+                await PublishOrderStatusAsync(message, result, actualOrderId);
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error processing order message: CorrelationId={CorrelationId}", message.CorrelationId);
                 
-                // Publish error message (optional)
-                await PublishOrderStatusAsync(message, false);
+                // Publish error message with actual order ID if available
+                await PublishOrderStatusAsync(message, false, actualOrderId);
             }
         }
 
-        private async Task PublishOrderStatusAsync(OrderMessage message, bool result)
+        private async Task PublishOrderStatusAsync(OrderMessage message, bool result, int? actualOrderId = null)
         {
             var statusMessage = new Domain.OrderStatusMessage
             {
-                OrderId = int.TryParse(message.CorrelationId, out var orderId) ? orderId : 0, // Use correlation as order ID
+                OrderId = actualOrderId ?? 0, // Use actual order ID if available
                 TenantId = message.TenantId,
                 Status = result ? "Completed" : "Failed",
                 CorrelationId = message.CorrelationId,
@@ -84,30 +104,9 @@ namespace Application
                 await _rabbitMQService.PublishMessageAsync(
                     statusMessage, 
                     _statusQueueName);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Failed to publish order status message: CorrelationId={CorrelationId}", 
-                    message.CorrelationId);
-            }
-        }
-
-        private async Task PublishOrderStatusMessageAsync(OrderMessage message, string status)
-        {
-            var statusMessage = new Domain.OrderStatusMessage
-            {
-                OrderId = int.TryParse(message.CorrelationId, out var orderId) ? orderId : 0, // Use correlation as order ID
-                TenantId = message.TenantId,
-                Status = status,
-                CorrelationId = message.CorrelationId,
-                OriginalMessage = message
-            };
-
-            try
-            {
-                await _rabbitMQService.PublishMessageAsync(
-                    statusMessage, 
-                    _statusQueueName);
+                    
+                _logger.LogInformation("Published order status: CorrelationId={CorrelationId}, OrderId={OrderId}, Status={Status}", 
+                    message.CorrelationId, actualOrderId, result ? "Completed" : "Failed");
             }
             catch (Exception ex)
             {
@@ -124,16 +123,5 @@ namespace Application
             
             await base.StopAsync(cancellationToken);
         }
-    }
-
-    public class OrderStatusMessage
-    {
-        public string CorrelationId { get; set; }
-        public int TenantId { get; set; }
-        public int UserId { get; set; }
-        public decimal Amount { get; set; }
-        public string Status { get; set; }
-        public DateTime Timestamp { get; set; }
-        public OrderMessage OriginalMessage { get; set; }
     }
 }
