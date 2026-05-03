@@ -1,0 +1,61 @@
+services:
+  # Order Service
+  - type: web
+    name: orderservice
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    plan: free
+    healthCheckPath: /health
+    healthCheckTimeout: 30
+    envVars:
+      - key: ASPNETCORE_ENVIRONMENT
+        value: Production
+      - key: ConnectionStrings__DefaultConnection
+        fromDatabase:
+          name: orderservice-db
+          property: connectionString
+      - key: RUN_MIGRATIONS
+        value: true
+      - key: MIGRATION_MAX_ATTEMPTS
+        value: 5
+      - key: JwtSettings__SecretKey
+        generateValue: true
+      - key: JwtSettings__Issuer
+        value: saasify-orderservice
+      - key: JwtSettings__Audience
+        value: saasify-client
+      - key: RabbitMQ__HostName
+        value: your-cloudamqp-host.rmq.cloudamqp.com
+      - key: RabbitMQ__UserName
+        value: your-cloudamqp-username
+      - key: RabbitMQ__Password
+        value: your-cloudamqp-password
+      - key: RabbitMQ__VirtualHost
+        value: your-cloudamqp-vhost
+      - key: RabbitMQ__Port
+        value: 5672
+      - key: RabbitMQ__SslEnabled
+        value: true
+      - key: Logging__LogLevel__Default
+        value: Information
+      - key: Logging__LogLevel__Microsoft
+        value: Warning
+      - key: Logging__LogLevel__Microsoft.EntityFrameworkCore
+        value: Information
+      - key: Logging__LogLevel__RabbitMQ
+        value: Information
+
+  # Order Service Database
+  - type: pserv
+    name: orderservice-db
+    runtime: postgres
+    plan: free
+    ipAllowList: []
+    envVars:
+      - key: POSTGRES_DB
+        value: orderservice
+      - key: POSTGRES_USER
+        value: postgres
+      - key: POSTGRES_PASSWORD
+        generateValue: true
