@@ -22,12 +22,13 @@ namespace Infrastructure
         private readonly ILogger<RabbitMQService> _logger;
         private readonly IConnection _connection;
         private readonly IModel _channel;
-        private readonly string _exchangeName = "order.exchange";
+        private readonly string _exchangeName;
 
         public RabbitMQService(IConfiguration configuration, ILogger<RabbitMQService> logger)
         {
             _configuration = configuration;
             _logger = logger;
+            _exchangeName = _configuration["OrderQueue:Exchange"] ?? "order.exchange";
 
             var factory = new ConnectionFactory()
             {

@@ -1,6 +1,7 @@
 using Application;
 using Domain;
 using Infrastructure;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using System.Diagnostics;
@@ -12,16 +13,20 @@ namespace Application
         private readonly IRabbitMQService _rabbitMQService;
         private readonly IOrderService _orderService;
         private readonly ILogger<MessageProcessorService> _logger;
-        private readonly string _queueName = "order.queue";
+        private readonly string _queueName;
+        private readonly string _statusQueueName;
 
         public MessageProcessorService(
             IRabbitMQService rabbitMQService,
             IOrderService orderService,
+            IConfiguration configuration,
             ILogger<MessageProcessorService> logger)
         {
             _rabbitMQService = rabbitMQService;
             _orderService = orderService;
             _logger = logger;
+            _queueName = configuration["OrderQueue:Queue"] ?? "order.queue";
+            _statusQueueName = configuration["OrderQueue:StatusQueue"] ?? "order.status.queue";
         }
 
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -75,7 +80,7 @@ namespace Application
             {
                 await _rabbitMQService.PublishMessageAsync(
                     statusMessage, 
-                    "order.status.queue");
+                    _statusQueueName);
             }
             catch (Exception ex)
             {
@@ -99,7 +104,7 @@ namespace Application
             {
                 await _rabbitMQService.PublishMessageAsync(
                     statusMessage, 
-                    "order.status.queue");
+                    _statusQueueName);
             }
             catch (Exception ex)
             {
