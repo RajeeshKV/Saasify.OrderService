@@ -101,6 +101,8 @@ namespace Infrastructure
                 properties.Timestamp = new AmqpTimestamp(DateTimeOffset.UtcNow.ToUnixTimeSeconds());
                 properties.ContentType = "application/json";
 
+                await Task.Yield(); // Ensure async implementation
+
                 _channel.BasicPublish(
                     exchange: _exchangeName,
                     routingKey: queueName,

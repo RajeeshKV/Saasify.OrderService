@@ -17,15 +17,15 @@ MIGRATION_MAX_ATTEMPTS=5
 
 ### **JWT Authentication**
 ```bash
-# JWT Token Configuration
-JwtSettings__SecretKey=your-super-secret-jwt-key-256-bits-minimum
-JwtSettings__Issuer=saasify-orderservice
-JwtSettings__Audience=saasify-client
+# JWT Token Configuration (Must match original SaaSify project)
+JwtSettings__SecretKey=your-super-secret-key-that-is-at-least-32-characters-long-for-production
+JwtSettings__Issuer=MultiTenantSaaS
+JwtSettings__Audience=MultiTenantSaaS
 ```
 
-### **RabbitMQ/CloudAMQP Integration**
+### **CloudAMQP Integration**
 ```bash
-# CloudAMQP Connection
+# CloudAMQP Connection (Same as RabbitMQ client)
 RabbitMQ__HostName=your-cloudamqp-host.rmq.cloudamqp.com
 RabbitMQ__UserName=your-cloudamqp-username
 RabbitMQ__Password=your-cloudamqp-password
@@ -74,20 +74,66 @@ PATH="${PATH}:/root/.dotnet/tools"
 | `ASPNETCORE_ENVIRONMENT` | `Production` | Application environment |
 | `ConnectionStrings__DefaultConnection` | `postgresql://...` | Database connection string |
 | `RUN_MIGRATIONS` | `true` | Enable automatic migrations |
-| `JwtSettings__SecretKey` | `abc123...` | JWT signing key |
-| `JwtSettings__Issuer` | `saasify-orderservice` | JWT token issuer |
-| `JwtSettings__Audience` | `saasify-client` | JWT token audience |
+| `MIGRATION_MAX_ATTEMPTS` | `5` | Max migration retry attempts |
+| `JwtSettings__SecretKey` | `your-super-secret-key-32-chars` | JWT signing key (32+ chars) |
+| `JwtSettings__Issuer` | `MultiTenantSaaS` | JWT token issuer (matches SaaSify) |
+| `JwtSettings__Audience` | `MultiTenantSaaS` | JWT token audience (matches SaaSify) |
 
-### **Optional but Recommended**
+### **CloudAMQP (Required for Event Processing)**
 | Variable | Example Value | Description |
 |-----------|---------------|-------------|
-| `MIGRATION_MAX_ATTEMPTS` | `5` | Max migration retry attempts |
-| `RabbitMQ__HostName` | `host.rmq.cloudamqp.com` | CloudAMQP server host |
-| `RabbitMQ__UserName` | `username` | CloudAMQP username |
-| `RabbitMQ__Password` | `password` | CloudAMQP password |
-| `RabbitMQ__VirtualHost` | `vhost` | CloudAMQP virtual host |
+| `RabbitMQ__HostName` | `your-cloudamqp-host.rmq.cloudamqp.com` | CloudAMQP server host |
+| `RabbitMQ__UserName` | `your-cloudamqp-username` | CloudAMQP username |
+| `RabbitMQ__Password` | `your-cloudamqp-password` | CloudAMQP password |
+| `RabbitMQ__VirtualHost` | `your-cloudamqp-vhost` | CloudAMQP virtual host |
 | `RabbitMQ__Port` | `5672` | CloudAMQP port |
 | `RabbitMQ__SslEnabled` | `true` | Enable SSL for CloudAMQP |
+
+### **Queue Configuration**
+| Variable | Example Value | Description |
+|-----------|---------------|-------------|
+| `ORDER_EXCHANGE` | `order.exchange` | Message exchange name |
+| `ORDER_QUEUE` | `order.queue` | Incoming order queue |
+| `STATUS_QUEUE` | `order.status.queue` | Status update queue |
+| `QUEUE_DURABLE` | `true` | Messages survive restarts |
+
+### **Logging & Debugging**
+| Variable | Example Value | Description |
+|-----------|---------------|-------------|
+| `Logging__LogLevel__Default` | `Information` | Default logging level |
+| `Logging__LogLevel__Microsoft` | `Warning` | Microsoft library logging |
+| `Logging__LogLevel__Microsoft.EntityFrameworkCore` | `Information` | EF Core logging |
+| `Logging__LogLevel__RabbitMQ` | `Information` | CloudAMQP client logging |
+
+## 🔄 **Event-Driven Architecture**
+
+### **How Main API Knows Order is Done**
+
+#### **Option 1: Event-Driven (Recommended)**
+```bash
+# OrderService publishes OrderStatusUpdated events
+SaaSify API consumes events → Updates local database → Frontend polls/gets notified
+```
+
+#### **Option 2: Database Synchronization**
+```bash
+# SaaSify API queries OrderService database directly
+SaaSify API → GET /api/orders/{id} → OrderService returns status → Frontend updates
+```
+
+#### **Option 3: Hybrid Approach**
+```bash
+# Both events and direct queries for critical updates
+Events for async processing + Direct queries for immediate status checks
+```
+
+### **Event Flow Summary**
+```
+1. SaaSify API creates order → Publishes OrderCreated event
+2. OrderService consumes event → Processes order → Publishes OrderStatusUpdated event  
+3. SaaSify API consumes event → Updates order status → Frontend notified
+4. Frontend receives real-time updates via polling/WebSocket
+```
 
 ### **Logging & Debugging**
 | Variable | Example Value | Description |
@@ -205,10 +251,10 @@ MIGRATION_MAX_ATTEMPTS=5
 # Database
 ConnectionStrings__DefaultConnection=Host=localhost;Database=order_service;Username=postgres;Password=password
 
-# JWT
-JwtSettings__SecretKey=your-super-secret-jwt-key-for-development
-JwtSettings__Issuer=saasify-orderservice
-JwtSettings__Audience=saasify-client
+# JWT (Must match original SaaSify project)
+JwtSettings__SecretKey=your-super-secret-key-that-is-at-least-32-characters-long-for-production
+JwtSettings__Issuer=MultiTenantSaaS
+JwtSettings__Audience=MultiTenantSaaS
 
 # RabbitMQ (Local)
 RabbitMQ__HostName=localhost

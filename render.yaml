@@ -22,9 +22,9 @@ services:
       - key: JwtSettings__SecretKey
         generateValue: true
       - key: JwtSettings__Issuer
-        value: saasify-orderservice
+        value: MultiTenantSaaS
       - key: JwtSettings__Audience
-        value: saasify-client
+        value: MultiTenantSaaS
       - key: RabbitMQ__HostName
         value: your-cloudamqp-host.rmq.cloudamqp.com
       - key: RabbitMQ__UserName

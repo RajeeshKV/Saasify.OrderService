@@ -3,6 +3,7 @@ using Infrastructure;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using System.Diagnostics;
+using System.Diagnostics;
 
 namespace Application
 {
@@ -19,6 +20,7 @@ namespace Application
     {
         private readonly OrderDbContext _context;
         private readonly ILogger<OrderService> _logger;
+        private readonly ActivitySource _activitySource = new("OrderService");
 
         public OrderService(OrderDbContext context, ILogger<OrderService> logger)
         {
@@ -28,7 +30,7 @@ namespace Application
 
         public async Task<OrderResponse> CreateOrderAsync(OrderMessage message)
         {
-            using var activity = Activity.StartActivity("CreateOrder");
+            using var activity = _activitySource.StartActivity("CreateOrder", ActivityKind.Internal);
             activity?.SetTag("tenant.id", message.TenantId.ToString());
             activity?.SetTag("user.id", message.UserId.ToString());
             activity?.SetTag("order.amount", message.Amount.ToString());
@@ -178,11 +180,12 @@ namespace Application
 
         public async Task<bool> ProcessOrderAsync(OrderMessage message)
         {
-            using var activity = Activity.StartActivity("ProcessOrder");
+            using var activity = _activitySource.StartActivity("ProcessOrder", ActivityKind.Internal);
             activity?.SetTag("tenant.id", message.TenantId.ToString());
-            activity?.SetTag("order.correlation_id", message.CorrelationId);
+            activity?.SetTag("correlation.id", message.CorrelationId);
             activity?.SetTag("order.amount", message.Amount.ToString());
-
+            
+            var stopwatch = Stopwatch.StartNew();
             _logger.LogInformation("Starting order processing: TenantId={TenantId}, CorrelationId={CorrelationId}, Amount={Amount}", 
                 message.TenantId, message.CorrelationId, message.Amount);
 

@@ -73,7 +73,7 @@ namespace OrderService.Controllers
 
                 var order = await _orderService.GetOrderAsync(id, tenantId);
                 
-                if (order == null)
+                if (order is null)
                 {
                     return NotFound();
                 }

@@ -37,8 +37,7 @@ namespace Infrastructure
 
             // Health Checks
             services.AddHealthChecks()
-                .AddDbContextCheck<OrderDbContext>()
-                .AddCheck<MigrationHealthCheck>("migration");
+                .AddCheck<DatabaseHealthCheck>("database");
 
             return services;
         }

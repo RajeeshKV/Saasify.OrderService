@@ -1,7 +1,9 @@
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.IdentityModel.Tokens;
+using System.Diagnostics;
 using System.Text;
 using Infrastructure;
+using Microsoft.Extensions.Diagnostics.HealthChecks;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -79,28 +81,8 @@ app.MapGet("/health", () => new
 .WithName("HealthCheck")
 .WithOpenApi();
 
-app.MapHealthChecks("/healthz", new HealthCheckOptions
-{
-    ResponseWriter = async (context, report) =>
-    {
-        context.Response.ContentType = "application/json";
-        var response = new
-        {
-            Status = report.Status.ToString(),
-            Checks = report.Entries.Select(entry => new
-            {
-                Name = entry.Key,
-                Status = entry.Value.Status.ToString(),
-                Duration = entry.Value.Duration.TotalMilliseconds,
-                Description = entry.Value.Description,
-                Data = entry.Value.Data
-            }),
-            TotalDuration = report.TotalDuration.TotalMilliseconds,
-            Timestamp = DateTime.UtcNow
-        };
-        await context.Response.WriteAsync(System.Text.Json.JsonSerializer.Serialize(response));
-    }
-})
+// Simple health check endpoint
+app.MapHealthChecks("/healthz")
 .WithName("DetailedHealthCheck")
 .WithOpenApi();
 
