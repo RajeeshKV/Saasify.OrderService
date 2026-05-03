@@ -35,9 +35,7 @@ namespace Infrastructure
             // Background Services
             services.AddHostedService<MessageProcessorService>();
 
-            // Health Checks
-            services.AddHealthChecks()
-                .AddCheck<DatabaseHealthCheck>("database");
+            // Health Checks are registered in Program.cs
 
             return services;
         }

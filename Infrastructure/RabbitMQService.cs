@@ -20,9 +20,13 @@ namespace Infrastructure
     {
         private readonly IConfiguration _configuration;
         private readonly ILogger<RabbitMQService> _logger;
-        private IConnection _connection;
-        private IModel _channel;
+        private IConnection? _connection;
+        private IModel? _channel;
         private readonly string _exchangeName;
+        private readonly SemaphoreSlim _connectionSemaphore = new SemaphoreSlim(1, 1);
+        private bool _isConnected = false;
+        private TaskCompletionSource<bool> _connectionTcs = new TaskCompletionSource<bool>();
+        private Task? _initializationTask;
 
         public RabbitMQService(IConfiguration configuration, ILogger<RabbitMQService> logger)
         {
@@ -31,7 +35,7 @@ namespace Infrastructure
             _exchangeName = _configuration["OrderQueue:Exchange"] ?? "order.exchange";
             
             // Initialize connection asynchronously in background
-            Task.Run(InitializeConnectionAsync);
+            _initializationTask = InitializeConnectionAsync();
         }
 
         private async Task InitializeConnectionAsync()
@@ -77,6 +81,7 @@ namespace Infrastructure
             else
             {
                 _logger.LogWarning("OrderService will start without RabbitMQ connection. Orders will be queued locally.");
+                _connectionTcs.SetResult(false);
             }
         }
 
@@ -104,8 +109,12 @@ namespace Infrastructure
                     NetworkRecoveryInterval = TimeSpan.FromSeconds(10)
                 };
 
-                _connection = factory.CreateConnection();
-                _channel = _connection.CreateModel();
+                await Task.Run(() => {
+                    _connection = factory.CreateConnection();
+                    _channel = _connection.CreateModel();
+                });
+                _isConnected = true;
+                _connectionTcs.SetResult(true);
                 
                 _logger.LogInformation("RabbitMQ connection established via AMQPS URI");
             }
@@ -155,8 +164,12 @@ namespace Infrastructure
 
                     _logger.LogInformation("Attempting standard RabbitMQ connection (attempt {RetryCount}/{MaxRetries})", retryCount + 1, maxRetries);
                     
-                    _connection = factory.CreateConnection();
-                    _channel = _connection.CreateModel();
+                    await Task.Run(() => {
+                        _connection = factory.CreateConnection();
+                        _channel = _connection.CreateModel();
+                    });
+                    _isConnected = true;
+                    _connectionTcs.SetResult(true);
                     
                     _logger.LogInformation("RabbitMQ connection established via standard method");
                     break;
@@ -181,6 +194,8 @@ namespace Infrastructure
         {
             try
             {
+                _isConnected = false;
+                _connectionTcs = new TaskCompletionSource<bool>();
                 _channel?.Close();
                 _channel = null;
                 _connection?.Close();
@@ -256,6 +271,9 @@ namespace Infrastructure
         {
             try
             {
+                // Wait for RabbitMQ connection to be established
+                await WaitForConnectionAsync();
+                
                 // Check if RabbitMQ is connected
                 if (_connection == null || _channel == null)
                 {
@@ -335,6 +353,7 @@ namespace Infrastructure
         {
             try
             {
+                _connectionSemaphore?.Dispose();
                 _channel?.Close();
                 _connection?.Close();
                 _logger.LogInformation("RabbitMQ connection closed");
@@ -344,5 +363,21 @@ namespace Infrastructure
                 _logger.LogError(ex, "Error closing RabbitMQ connection");
             }
         }
+        
+        private async Task WaitForConnectionAsync()
+        {
+            var timeout = TimeSpan.FromSeconds(30);
+            
+            try
+            {
+                await await Task.WhenAny(_connectionTcs.Task, Task.Delay(timeout));
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Timeout waiting for RabbitMQ connection");
+            }
+        }
+        
+        public bool IsConnected => _isConnected;
     }
 }

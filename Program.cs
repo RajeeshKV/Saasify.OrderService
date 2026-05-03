@@ -4,6 +4,8 @@ using System.Diagnostics;
 using System.Text;
 using Infrastructure;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
+using Infrastructure.HealthChecks;
+using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -86,11 +88,24 @@ builder.Services.AddCors(options =>
 {
     options.AddPolicy("AllowAll", policy =>
     {
-        policy.AllowAnyOrigin()
+        policy.WithOrigins("https://saasify.rajeesh.online", 
+                          "http://saasify.rajeesh.online",
+                          "https://saasifyapi-client.rajeesh.online",
+                          "http://saasifyapi-client.rajeesh.online",
+                          "http://localhost:3000",
+                          "https://localhost:3000",
+                          "http://localhost:5000",
+                          "https://localhost:5000")
               .AllowAnyMethod()
-              .AllowAnyHeader();
+              .AllowAnyHeader()
+              .AllowCredentials();
     });
 });
+
+// Add health checks with proper configuration
+builder.Services.AddHealthChecks()
+    .AddCheck<DatabaseHealthCheck>("database", tags: new[] { "ready" })
+    .AddCheck<RabbitMQHealthCheck>("rabbitmq", tags: new[] { "ready" });
 
 var app = builder.Build();
 
@@ -120,29 +135,71 @@ if (app.Environment.IsDevelopment() || app.Environment.IsProduction())
     });
 }
 
-app.UseHttpsRedirection();
+// Skip HTTPS redirection for health endpoints to support both HTTP and HTTPS
+app.UseWhen(context => !context.Request.Path.StartsWithSegments("/health"), 
+    app => app.UseHttpsRedirection());
 
 app.UseCors("AllowAll");
+
+// Health check endpoints (placed before authentication)
+app.MapGet("/health", async (IServiceProvider serviceProvider) =>
+{
+    var healthCheckService = serviceProvider.GetRequiredService<HealthCheckService>();
+    var healthCheckReport = await healthCheckService.CheckHealthAsync();
+    
+    var databaseStatus = healthCheckReport.Entries.ContainsKey("database") 
+        ? healthCheckReport.Entries["database"].Status.ToString()
+        : "Unknown";
+    var rabbitmqStatus = healthCheckReport.Entries.ContainsKey("rabbitmq") 
+        ? healthCheckReport.Entries["rabbitmq"].Status.ToString()
+        : "Unknown";
+    
+    return new
+    {
+        Status = healthCheckReport.Status.ToString(),
+        Service = "OrderService",
+        Timestamp = DateTime.UtcNow,
+        Version = "1.0.0",
+        Database = databaseStatus,
+        RabbitMQ = rabbitmqStatus
+    };
+})
+.RequireCors("AllowAll")
+.WithName("HealthCheck")
+.WithOpenApi();
+
+// Detailed health check endpoint with proper health check response
+app.MapHealthChecks("/healthz", new HealthCheckOptions
+{
+    ResponseWriter = async (context, report) =>
+    {
+        context.Response.ContentType = "application/json";
+        
+        var response = new
+        {
+            Status = report.Status == HealthStatus.Healthy ? "Healthy" : "Unhealthy",
+            Checks = report.Entries.Select(entry => new
+            {
+                Name = entry.Key,
+                Status = entry.Value.Status.ToString(),
+                Description = entry.Value.Description,
+                Duration = entry.Value.Duration.TotalMilliseconds,
+                Data = entry.Value.Data
+            }),
+            TotalDuration = report.TotalDuration.TotalMilliseconds,
+            Timestamp = DateTime.UtcNow
+        };
+        
+        await context.Response.WriteAsync(System.Text.Json.JsonSerializer.Serialize(response));
+    }
+})
+.RequireCors("AllowAll")
+.WithName("DetailedHealthCheck")
+.WithOpenApi();
 
 app.UseAuthentication();
 app.UseAuthorization();
 
 app.MapControllers();
-
-// Health check endpoints
-app.MapGet("/health", () => new
-{
-    Status = "Healthy",
-    Service = "OrderService",
-    Timestamp = DateTime.UtcNow,
-    Version = "1.0.0"
-})
-.WithName("HealthCheck")
-.WithOpenApi();
-
-// Simple health check endpoint
-app.MapHealthChecks("/healthz")
-.WithName("DetailedHealthCheck")
-.WithOpenApi();
 
 app.Run();

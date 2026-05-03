@@ -11,19 +11,19 @@ namespace Application
     public class MessageProcessorService : BackgroundService
     {
         private readonly IRabbitMQService _rabbitMQService;
-        private readonly IOrderService _orderService;
+        private readonly IServiceProvider _serviceProvider;
         private readonly ILogger<MessageProcessorService> _logger;
         private readonly string _queueName;
         private readonly string _statusQueueName;
 
         public MessageProcessorService(
             IRabbitMQService rabbitMQService,
-            IOrderService orderService,
+            IServiceProvider serviceProvider,
             IConfiguration configuration,
             ILogger<MessageProcessorService> logger)
         {
             _rabbitMQService = rabbitMQService;
-            _orderService = orderService;
+            _serviceProvider = serviceProvider;
             _logger = logger;
             _queueName = configuration["OrderQueue:Queue"] ?? "order.queue";
             _statusQueueName = configuration["OrderQueue:StatusQueue"] ?? "order.status.queue";
@@ -45,13 +45,16 @@ namespace Application
                 _logger.LogInformation("Processing order message: CorrelationId={CorrelationId}, TenantId={TenantId}, Amount={Amount}", 
                     message.CorrelationId, message.TenantId, message.Amount);
                 
+                using var scope = _serviceProvider.CreateScope();
+                var orderService = scope.ServiceProvider.GetRequiredService<IOrderService>();
+                
                 // Create order
-                var orderResponse = await _orderService.CreateOrderAsync(message);
+                var orderResponse = await orderService.CreateOrderAsync(message);
                 _logger.LogInformation("Created new order: OrderId={OrderId}, ExternalOrderId={ExternalOrderId}", 
                     orderResponse.OrderId, orderResponse.ExternalOrderId);
                 
                 // Simulate payment processing
-                var result = await _orderService.ProcessOrderAsync(message);
+                var result = await orderService.ProcessOrderAsync(message);
                 
                 // Publish status update
                 await PublishOrderStatusAsync(message, result);
