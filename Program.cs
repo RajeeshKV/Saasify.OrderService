@@ -141,61 +141,6 @@ app.UseWhen(context => !context.Request.Path.StartsWithSegments("/api/health"),
 
 app.UseCors("AllowAll");
 
-// Health check endpoints (placed before authentication)
-app.MapGet("/api/health", async (IServiceProvider serviceProvider) =>
-{
-    var healthCheckService = serviceProvider.GetRequiredService<HealthCheckService>();
-    var healthCheckReport = await healthCheckService.CheckHealthAsync();
-    
-    var databaseStatus = healthCheckReport.Entries.ContainsKey("database") 
-        ? healthCheckReport.Entries["database"].Status.ToString()
-        : "Unknown";
-    var rabbitmqStatus = healthCheckReport.Entries.ContainsKey("rabbitmq") 
-        ? healthCheckReport.Entries["rabbitmq"].Status.ToString()
-        : "Unknown";
-    
-    return new
-    {
-        Status = healthCheckReport.Status.ToString(),
-        Service = "OrderService",
-        Timestamp = DateTime.UtcNow,
-        Version = "1.0.0",
-        Database = databaseStatus,
-        RabbitMQ = rabbitmqStatus
-    };
-})
-.RequireCors("AllowAll")
-.WithName("HealthCheck")
-.WithOpenApi();
-
-// Detailed health check endpoint with proper health check response
-app.MapHealthChecks("/api/healthz", new HealthCheckOptions
-{
-    ResponseWriter = async (context, report) =>
-    {
-        context.Response.ContentType = "application/json";
-        
-        var response = new
-        {
-            Status = report.Status == HealthStatus.Healthy ? "Healthy" : "Unhealthy",
-            Checks = report.Entries.Select(entry => new
-            {
-                Name = entry.Key,
-                Status = entry.Value.Status.ToString(),
-                Description = entry.Value.Description,
-                Duration = entry.Value.Duration.TotalMilliseconds,
-                Data = entry.Value.Data
-            }),
-            TotalDuration = report.TotalDuration.TotalMilliseconds,
-            Timestamp = DateTime.UtcNow
-        };
-        
-        await context.Response.WriteAsync(System.Text.Json.JsonSerializer.Serialize(response));
-    }
-})
-.RequireCors("AllowAll")
-.WithName("DetailedHealthCheck")
-.WithOpenApi();
 
 app.UseAuthentication();
 app.UseAuthorization();
