@@ -22,11 +22,12 @@ namespace Infrastructure
                 var connectionString = Environment.GetEnvironmentVariable("DATABASE_URL") 
                     ?? configuration.GetConnectionString("DefaultConnection");
                 
-                var dataSourceBuilder = new Npgsql.NpgsqlDataSourceBuilder(connectionString);
-                dataSourceBuilder.EnableDynamicJson(); // Enable dynamic JSON serialization
-                var dataSource = dataSourceBuilder.Build();
-                
-                options.UseNpgsql(dataSource, b => b.MigrationsAssembly("Infrastructure"));
+                options.UseNpgsql(connectionString, npgsqlOptions => 
+                {
+                    npgsqlOptions.MigrationsAssembly("Infrastructure");
+                })
+                .ConfigureWarnings(warnings => 
+                    warnings.Ignore(Microsoft.EntityFrameworkCore.Diagnostics.CoreEventId.ManyServiceProvidersCreatedWarning));
             });
 
             // RabbitMQ
