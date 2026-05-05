@@ -1,4 +1,5 @@
-using Application;
+using Application.Commands;
+using Application.Handlers;
 using Domain;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -7,16 +8,16 @@ using Microsoft.Extensions.Logging;
 namespace OrderService.Controllers
 {
     [ApiController]
-    [Route("api/[controller]")]
+    [Route("api/v1/orders")]
     [Authorize]
     public class OrdersController : ControllerBase
     {
-        private readonly IOrderService _orderService;
+        private readonly IOrderCommandHandler _commandHandler;
         private readonly ILogger<OrdersController> _logger;
 
-        public OrdersController(IOrderService orderService, ILogger<OrdersController> logger)
+        public OrdersController(IOrderCommandHandler commandHandler, ILogger<OrdersController> logger)
         {
-            _orderService = orderService;
+            _commandHandler = commandHandler;
             _logger = logger;
         }
 
@@ -34,19 +35,17 @@ namespace OrderService.Controllers
                     return BadRequest("Invalid tenant or user ID in token");
                 }
 
-                var orderMessage = new OrderMessage
-                {
-                    TenantId = tenantId,
-                    UserId = userId,
-                    Amount = request.Amount,
-                    Currency = request.Currency ?? "USD",
-                    Description = request.Description,
-                    CustomerEmail = request.CustomerEmail,
-                    Metadata = request.Metadata ?? new Dictionary<string, string>(),
-                    CorrelationId = Guid.NewGuid().ToString()
-                };
+                var command = new CreateOrderCommand(
+                    tenantId,
+                    userId,
+                    request.Amount,
+                    request.Currency ?? "USD",
+                    request.Description,
+                    request.CustomerEmail,
+                    request.Metadata ?? new Dictionary<string, string>()
+                );
 
-                var order = await _orderService.CreateOrderAsync(orderMessage);
+                var order = await _commandHandler.Handle(command);
                 
                 _logger.LogInformation("Order created via API: OrderId={OrderId}, TenantId={TenantId}", 
                     order.OrderId, order.TenantId);
@@ -71,7 +70,8 @@ namespace OrderService.Controllers
                     return BadRequest("Invalid tenant ID in token");
                 }
 
-                var order = await _orderService.GetOrderAsync(id, tenantId);
+                var query = new GetOrderQuery(id, tenantId);
+                var order = await _commandHandler.Handle(query);
                 
                 if (order is null)
                 {
@@ -101,7 +101,8 @@ namespace OrderService.Controllers
                     return BadRequest("Invalid tenant ID in token");
                 }
 
-                var orders = await _orderService.GetOrdersByTenantAsync(tenantId, page, pageSize);
+                var query = new GetOrdersQuery(tenantId, page, pageSize);
+                var orders = await _commandHandler.Handle(query);
                 
                 return Ok(orders);
             }
@@ -123,7 +124,8 @@ namespace OrderService.Controllers
                     return BadRequest("Invalid tenant ID in token");
                 }
 
-                var order = await _orderService.UpdateOrderStatusAsync(id, tenantId, request.Status);
+                var command = new UpdateOrderStatusCommand(id, tenantId, request.Status);
+                var order = await _commandHandler.Handle(command);
                 
                 if (order == null)
                 {

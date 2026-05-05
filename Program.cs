@@ -136,13 +136,13 @@ if (app.Environment.IsDevelopment() || app.Environment.IsProduction())
 }
 
 // Skip HTTPS redirection for health endpoints to support both HTTP and HTTPS
-app.UseWhen(context => !context.Request.Path.StartsWithSegments("/health"), 
+app.UseWhen(context => !context.Request.Path.StartsWithSegments("/api/health"), 
     app => app.UseHttpsRedirection());
 
 app.UseCors("AllowAll");
 
 // Health check endpoints (placed before authentication)
-app.MapGet("/health", async (IServiceProvider serviceProvider) =>
+app.MapGet("/api/health", async (IServiceProvider serviceProvider) =>
 {
     var healthCheckService = serviceProvider.GetRequiredService<HealthCheckService>();
     var healthCheckReport = await healthCheckService.CheckHealthAsync();
@@ -169,7 +169,7 @@ app.MapGet("/health", async (IServiceProvider serviceProvider) =>
 .WithOpenApi();
 
 // Detailed health check endpoint with proper health check response
-app.MapHealthChecks("/healthz", new HealthCheckOptions
+app.MapHealthChecks("/api/healthz", new HealthCheckOptions
 {
     ResponseWriter = async (context, report) =>
     {

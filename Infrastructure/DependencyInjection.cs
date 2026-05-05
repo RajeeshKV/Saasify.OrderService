@@ -1,4 +1,5 @@
 using Application;
+using Application.Handlers;
 using Domain;
 using Infrastructure;
 using Microsoft.EntityFrameworkCore;
@@ -33,6 +34,7 @@ namespace Infrastructure
 
             // Services
             services.AddScoped<IOrderService, Application.OrderService>();
+            services.AddScoped<IOrderCommandHandler, Application.Handlers.OrderCommandHandler>();
 
             // Background Services
             services.AddHostedService<MessageProcessorService>();
